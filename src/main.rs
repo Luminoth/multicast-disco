@@ -15,12 +15,9 @@ struct ConnectionInfo {
 }
 
 // client / listener
-async fn run_client(
-    broadcast_iface: Ipv4Addr,
-    broadcast_group: Ipv4Addr,
-    broadcast_port: u16,
-) -> anyhow::Result<()> {
+async fn run_client(broadcast_group: Ipv4Addr, broadcast_port: u16) -> anyhow::Result<()> {
     // bind to the broadcast port
+    // TODO: does this need to be on a specific interface?
     let addr = format!("0.0.0.0:{}", broadcast_port);
     let socket = UdpSocket::bind(&addr).await?;
     println!("Listening on: {}", socket.local_addr()?);
@@ -30,12 +27,22 @@ async fn run_client(
     socket_ref.set_reuse_address(true)?;
     socket.broadcast()?;
 
-    // join the multicast group
-    println!(
-        "Joining multicast group {} on interface {}",
-        broadcast_group, broadcast_iface
-    );
-    socket.join_multicast_v4(broadcast_group, broadcast_iface)?;
+    // join the multicast group (IP_ADD_MEMBERSHIP) on every interface
+    let network_interfaces = NetworkInterface::show().unwrap();
+    for itf in network_interfaces.iter() {
+        if let Some(addr) = itf.addr {
+            match addr {
+                Addr::V4(addr) => {
+                    println!(
+                        "Joining multicast group {} on interface {}",
+                        broadcast_group, addr.ip
+                    );
+                    socket.join_multicast_v4(broadcast_group, addr.ip)?;
+                }
+                _ => (),
+            }
+        }
+    }
 
     let mut buf = vec![0; 1024];
     loop {
@@ -54,20 +61,30 @@ async fn run_client(
 async fn run_server(
     host: String,
     port: u16,
-    broadcast_iface: Ipv4Addr,
     broadcast_group: Ipv4Addr,
     broadcast_port: u16,
 ) -> anyhow::Result<()> {
     // bind to any port (nothing should be sending to the server)
+    // TODO: does this need to be on a specific interface?
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     println!("Broadcasting on: {}", socket.local_addr()?);
 
-    // join the multicast group
-    println!(
-        "Joining multicast group {} on interface {}",
-        broadcast_group, broadcast_iface
-    );
-    socket.join_multicast_v4(broadcast_group, broadcast_iface)?;
+    // join the multicast group (IP_ADD_MEMBERSHIP) on every interface
+    let network_interfaces = NetworkInterface::show().unwrap();
+    for itf in network_interfaces.iter() {
+        if let Some(addr) = itf.addr {
+            match addr {
+                Addr::V4(addr) => {
+                    println!(
+                        "Joining multicast group {} on interface {}",
+                        broadcast_group, addr.ip
+                    );
+                    socket.join_multicast_v4(broadcast_group, addr.ip)?;
+                }
+                _ => (),
+            }
+        }
+    }
 
     // broadcast our connection info to the multicast group:port
     let info = serde_json::to_string(&ConnectionInfo { host, port })?;
@@ -84,36 +101,17 @@ async fn run_server(
 async fn main() -> anyhow::Result<()> {
     let options = options::Options::parse();
 
-    let mut broadcast_iface = Ipv4Addr::UNSPECIFIED;
-
-    // look for a VPN to bind to instead
-    let network_interfaces = NetworkInterface::show().unwrap();
-    for itf in network_interfaces.iter() {
-        println!("{:?}", itf);
-        if itf.name == "tun0" {
-            if let Some(addr) = itf.addr {
-                match addr {
-                    Addr::V4(addr) => {
-                        broadcast_iface = addr.ip;
-                        break;
-                    }
-                    _ => (),
-                }
-            }
-        }
-    }
-
     match options.command {
         options::Commands::Client {
             broadcast_group,
             broadcast_port,
-        } => run_client(broadcast_iface, broadcast_group, broadcast_port).await?,
+        } => run_client(broadcast_group, broadcast_port).await?,
         options::Commands::Server {
             host,
             port,
             broadcast_group,
             broadcast_port,
-        } => run_server(host, port, broadcast_iface, broadcast_group, broadcast_port).await?,
+        } => run_server(host, port, broadcast_group, broadcast_port).await?,
     }
 
     Ok(())
