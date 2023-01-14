@@ -3,6 +3,7 @@ mod options;
 use std::net::Ipv4Addr;
 
 use clap::Parser;
+use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use serde::{Deserialize, Serialize};
 use tokio::net::UdpSocket;
 
@@ -14,7 +15,11 @@ struct ConnectionInfo {
 }
 
 // client / listener
-async fn run_client(broadcast_group: Ipv4Addr, broadcast_port: u16) -> anyhow::Result<()> {
+async fn run_client(
+    broadcast_iface: Ipv4Addr,
+    broadcast_group: Ipv4Addr,
+    broadcast_port: u16,
+) -> anyhow::Result<()> {
     // bind to the broadcast port
     let addr = format!("0.0.0.0:{}", broadcast_port);
     let socket = UdpSocket::bind(&addr).await?;
@@ -25,9 +30,12 @@ async fn run_client(broadcast_group: Ipv4Addr, broadcast_port: u16) -> anyhow::R
     socket_ref.set_reuse_address(true)?;
     socket.broadcast()?;
 
-    // join the multicast group on any interface
-    println!("Joining multicast group {}", broadcast_group);
-    socket.join_multicast_v4(broadcast_group, Ipv4Addr::UNSPECIFIED)?;
+    // join the multicast group
+    println!(
+        "Joining multicast group {} on interface {}",
+        broadcast_group, broadcast_iface
+    );
+    socket.join_multicast_v4(broadcast_group, broadcast_iface)?;
 
     let mut buf = vec![0; 1024];
     loop {
@@ -46,6 +54,7 @@ async fn run_client(broadcast_group: Ipv4Addr, broadcast_port: u16) -> anyhow::R
 async fn run_server(
     host: String,
     port: u16,
+    broadcast_iface: Ipv4Addr,
     broadcast_group: Ipv4Addr,
     broadcast_port: u16,
 ) -> anyhow::Result<()> {
@@ -53,9 +62,12 @@ async fn run_server(
     let socket = UdpSocket::bind("0.0.0.0:0").await?;
     println!("Broadcasting on: {}", socket.local_addr()?);
 
-    // join the multicast group on any interface
-    println!("Joining multicast group {}", broadcast_group);
-    socket.join_multicast_v4(broadcast_group, Ipv4Addr::UNSPECIFIED)?;
+    // join the multicast group
+    println!(
+        "Joining multicast group {} on interface {}",
+        broadcast_group, broadcast_iface
+    );
+    socket.join_multicast_v4(broadcast_group, broadcast_iface)?;
 
     // broadcast our connection info to the multicast group:port
     let info = serde_json::to_string(&ConnectionInfo { host, port })?;
@@ -72,17 +84,35 @@ async fn run_server(
 async fn main() -> anyhow::Result<()> {
     let options = options::Options::parse();
 
+    let mut broadcast_iface = Ipv4Addr::UNSPECIFIED;
+
+    // look for a VPN to bind to instead
+    let network_interfaces = NetworkInterface::show().unwrap();
+    for itf in network_interfaces.iter() {
+        if itf.name == "tun0" {
+            if let Some(addr) = itf.addr {
+                match addr {
+                    Addr::V4(addr) => {
+                        broadcast_iface = addr.ip;
+                        break;
+                    }
+                    _ => (),
+                }
+            }
+        }
+    }
+
     match options.command {
         options::Commands::Client {
             broadcast_group,
             broadcast_port,
-        } => run_client(broadcast_group, broadcast_port).await?,
+        } => run_client(broadcast_iface, broadcast_group, broadcast_port).await?,
         options::Commands::Server {
             host,
             port,
             broadcast_group,
             broadcast_port,
-        } => run_server(host, port, broadcast_group, broadcast_port).await?,
+        } => run_server(host, port, broadcast_iface, broadcast_group, broadcast_port).await?,
     }
 
     Ok(())
