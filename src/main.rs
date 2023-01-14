@@ -73,7 +73,7 @@ async fn run_server(
     let info = serde_json::to_string(&ConnectionInfo { host, port })?;
     let broadcast_addr = format!("{}:{}", broadcast_group, broadcast_port);
     loop {
-        println!("Broadcasting connection info ...");
+        println!("Broadcasting connection info to {} ...", broadcast_addr);
         socket.send_to(info.as_bytes(), &broadcast_addr).await?;
 
         tokio::time::sleep(tokio::time::Duration::from_secs(5)).await;
@@ -89,6 +89,7 @@ async fn main() -> anyhow::Result<()> {
     // look for a VPN to bind to instead
     let network_interfaces = NetworkInterface::show().unwrap();
     for itf in network_interfaces.iter() {
+        println!("{:?}", itf);
         if itf.name == "tun0" {
             if let Some(addr) = itf.addr {
                 match addr {
