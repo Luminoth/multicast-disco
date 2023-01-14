@@ -94,7 +94,7 @@ async fn run_server(
         }
     }
 
-    // increase the multicast TTL so we can go through tunnels
+    // increase the multicast TTL (IP_MULTICAST_TTL) so we can go through tunnels
     socket.set_multicast_ttl_v4(8)?;
 
     // broadcast our connection info to the multicast group:port
