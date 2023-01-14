@@ -33,6 +33,10 @@ async fn run_client(broadcast_group: Ipv4Addr, broadcast_port: u16) -> anyhow::R
         if let Some(addr) = itf.addr {
             match addr {
                 Addr::V4(addr) => {
+                    if addr.ip.is_link_local() {
+                        continue;
+                    }
+
                     println!(
                         "Joining multicast group {} on interface {}",
                         broadcast_group, addr.ip
@@ -75,6 +79,10 @@ async fn run_server(
         if let Some(addr) = itf.addr {
             match addr {
                 Addr::V4(addr) => {
+                    if addr.ip.is_link_local() {
+                        continue;
+                    }
+
                     println!(
                         "Joining multicast group {} on interface {}",
                         broadcast_group, addr.ip
