@@ -115,6 +115,7 @@ async fn run_client(broadcast_group: Ipv4Addr, broadcast_port: u16) -> anyhow::R
                 continue;
             }
 
+            println!("Discovered interface {} ({})", itf.name, addr.ip);
             discos.push(Discovery::new(addr.ip, broadcast_group, broadcast_port));
         }
     }*/
@@ -153,6 +154,7 @@ async fn run_server(
                 continue;
             }
 
+            println!("Discovered interface {} ({})", itf.name, addr.ip);
             discos.push(Discovery::new(addr.ip, broadcast_group, broadcast_port));
         }
     }
