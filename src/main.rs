@@ -1,11 +1,12 @@
 mod options;
 
 use std::net::Ipv4Addr;
+use std::sync::Arc;
 
 use clap::Parser;
 use network_interface::{Addr, NetworkInterface, NetworkInterfaceConfig};
 use serde::{Deserialize, Serialize};
-use tokio::{net::UdpSocket, task::JoinSet};
+use tokio::{net::UdpSocket, sync::Semaphore, task::JoinSet};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct ConnectionInfo {
@@ -20,14 +21,22 @@ struct Discovery {
     broadcast_interface: Ipv4Addr,
     broadcast_group: Ipv4Addr,
     broadcast_port: u16,
+
+    sync: Arc<Semaphore>,
 }
 
 impl Discovery {
-    fn new(broadcast_interface: Ipv4Addr, broadcast_group: Ipv4Addr, broadcast_port: u16) -> Self {
+    fn new(
+        broadcast_interface: Ipv4Addr,
+        broadcast_group: Ipv4Addr,
+        broadcast_port: u16,
+        sync: Arc<Semaphore>,
+    ) -> Self {
         Self {
             broadcast_interface,
             broadcast_group,
             broadcast_port,
+            sync,
         }
     }
 
@@ -38,6 +47,13 @@ impl Discovery {
         let socket = UdpSocket::bind(&addr).await?;
         println!("Broadcasting on: {}", socket.local_addr()?);
 
+        let socket_ref = socket2::SockRef::from(&socket);
+        println!(
+            "Default multicast interface: {}",
+            socket_ref.multicast_if_v4()?
+        );
+        socket_ref.set_multicast_if_v4(&self.broadcast_interface)?;
+
         // join the multicast group (IP_ADD_MEMBERSHIP)
         println!(
             "Joining multicast group {} on interface {}",
@@ -46,7 +62,7 @@ impl Discovery {
         socket.join_multicast_v4(self.broadcast_group, self.broadcast_interface)?;
 
         // increase the multicast TTL (IP_MULTICAST_TTL) so we can go through tunnels
-        socket.set_multicast_ttl_v4(8)?;
+        socket.set_multicast_ttl_v4(32)?;
 
         let info = serde_json::to_string(&ConnectionInfo {
             sender: self.broadcast_interface,
@@ -69,16 +85,28 @@ impl Discovery {
 
     // client / listener
     async fn listen(self) -> anyhow::Result<()> {
-        // TODO: this needs a mutex to avoid trying to re-bind the port before it can be reused
+        let socket = {
+            let _lock = self.sync.acquire().await?;
 
-        // bind to the broadcast port
-        let addr = format!("{}:{}", self.broadcast_interface, self.broadcast_port);
-        let socket = UdpSocket::bind(&addr).await?;
-        println!("Listening on: {}", socket.local_addr()?);
+            // bind to the broadcast port
+            let addr = format!("{}:{}", self.broadcast_interface, self.broadcast_port);
+            println!("Attempting to listen on {}", addr);
+            let socket = UdpSocket::bind(&addr).await?;
+            println!("Listening on: {}", socket.local_addr()?);
+
+            socket
+        };
+
+        let socket_ref = socket2::SockRef::from(&socket);
+        println!(
+            "Default multicast interface: {}",
+            socket_ref.multicast_if_v4()?
+        );
+        socket_ref.set_multicast_if_v4(&self.broadcast_interface)?;
 
         // allow multiple listeners
-        let socket_ref = socket2::SockRef::from(&socket);
         socket_ref.set_reuse_address(true)?;
+        //socket_ref.set_reuse_port(true)?;
         socket.broadcast()?;
 
         // join the multicast group (IP_ADD_MEMBERSHIP)
@@ -104,7 +132,15 @@ impl Discovery {
 }
 
 async fn run_client(broadcast_group: Ipv4Addr, broadcast_port: u16) -> anyhow::Result<()> {
-    let mut discos = vec![];
+    let sync = Arc::new(Semaphore::new(1));
+
+    #[allow(unused_mut)]
+    let mut discos = vec![Discovery::new(
+        "0.0.0.0".parse().unwrap(),
+        broadcast_group,
+        broadcast_port,
+        sync.clone(),
+    )];
 
     // TODO: this doesn't seem to pick up any of the broadcasts
     /*let network_interfaces = NetworkInterface::show().unwrap();
@@ -116,15 +152,14 @@ async fn run_client(broadcast_group: Ipv4Addr, broadcast_port: u16) -> anyhow::R
             }
 
             println!("Discovered interface {} ({})", itf.name, addr.ip);
-            discos.push(Discovery::new(addr.ip, broadcast_group, broadcast_port));
+            discos.push(Discovery::new(
+                addr.ip,
+                broadcast_group,
+                broadcast_port,
+                sync.clone(),
+            ));
         }
     }*/
-
-    discos.push(Discovery::new(
-        "0.0.0.0".parse().unwrap(),
-        broadcast_group,
-        broadcast_port,
-    ));
 
     let mut set = JoinSet::new();
     for disco in discos {
@@ -155,7 +190,12 @@ async fn run_server(
             }
 
             println!("Discovered interface {} ({})", itf.name, addr.ip);
-            discos.push(Discovery::new(addr.ip, broadcast_group, broadcast_port));
+            discos.push(Discovery::new(
+                addr.ip,
+                broadcast_group,
+                broadcast_port,
+                Arc::new(Semaphore::new(1)),
+            ));
         }
     }
 
