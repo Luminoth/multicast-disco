@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand};
 #[command(author, version, about, long_about = None)]
 pub enum Commands {
     Client {
-        #[arg(long, default_value = "224.0.0.123")]
+        #[arg(long, default_value = "239.0.0.123")]
         broadcast_group: Ipv4Addr,
 
         #[arg(long, default_value_t = 6772)]
@@ -19,7 +19,7 @@ pub enum Commands {
         #[arg(short, long, default_value_t = 1234)]
         port: u16,
 
-        #[arg(long, default_value = "224.0.0.123")]
+        #[arg(long, default_value = "239.0.0.123")]
         broadcast_group: Ipv4Addr,
 
         #[arg(long, default_value_t = 6772)]
